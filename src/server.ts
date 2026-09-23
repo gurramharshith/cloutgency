@@ -16,7 +16,7 @@ import {
 } from './domain.js';
 
 const app = express();
-const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../public');
+const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../public');
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(publicDir));
 
