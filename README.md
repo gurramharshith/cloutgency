@@ -1,0 +1,84 @@
+# Opmaint Permit to Work Module
+
+A full-stack Permit to Work module for a CMMS, built for the Opmaint Web Development Intern assignment. The app models a shared permit core with type-specific fields for Hot Work, Confined Space Entry, Working at Height, and Electrical / LOTO permits.
+
+## Tech Stack
+
+- Frontend: browser app with TypeScript-backed API contract and responsive HTML/CSS/JS
+- Backend: Node.js, Express, TypeScript
+- Database: SQLite for local zero-config review, with a Postgres-compatible migration in `migrations/001_initial_schema.sql`
+- Tests: Node test runner for state-machine and permission rules
+
+## Run Locally
+
+Requires Node 20+.
+
+```bash
+npm install
+npm run seed
+npm start
+```
+
+Open `http://localhost:3000`.
+
+Useful commands:
+
+```bash
+npm test
+npm run build
+```
+
+## Demo Logins
+
+| Role | Email | Password |
+|---|---|---|
+| Requester | `ravi@demo.com` | `ravi123` |
+| Area Owner | `priya@demo.com` | `priya123` |
+| Safety Officer | `anita@demo.com` | `anita123` |
+| Admin | `admin@demo.com` | `dev123` |
+
+Seed data creates 4 users, 2 plants, 3 areas, 6 equipment records, and 10 permits spread across Draft, Pending Approval, Approved, Active, Suspended, Closed, Closed Verified, Expired, Rejected, and Cancelled.
+
+## What Is Implemented
+
+- Email/password login with server-side sessions.
+- Shared permit entity plus dynamic type-specific detail fields.
+- Permit lifecycle enforced server-side: submit, approve/reject, activate, suspend, resume, expire, close, verify, cancel.
+- Server-side checks for all required approvals, planned start time, terminal states, active-only work logs, role permissions, area-owner scope, and no self-approval.
+- Dashboard filters by status, permit type, area, date range, and "my approvals pending".
+- Active and expiring-in-two-hours dashboard counters, plus countdown text on active rows.
+- Multi-step-style create form that adapts to permit type and saves as Draft.
+- Permit detail view with full core data, type details, approval trail, actions available to the logged-in user, closure notes, work log, extension requests, and readable audit timeline.
+- Approval view through permit detail: approve with comment/signature text or reject with mandatory reason.
+- Closure flow: requester closes with completion notes; safety officer/admin verifies with verification notes.
+- Immutable audit entries for state changes, approvals/rejections, auto-expiry, field edits, work logs, and extension decisions.
+- Extension request flow capped at 1-4 hours, safety/admin approval required.
+- Conflict-relevant data model: time, plant, area, equipment and permit type are structured. A warning UI for hot-work/confined-space overlaps is the next step.
+- Mobile-friendly layout with larger touch targets and responsive permit detail.
+
+## Data Model Notes
+
+The core permit fields live in `permits`; type-specific fields live in the `details` JSON column and are validated using the configuration in `src/domain.ts`. Adding a fifth permit type should mostly mean adding one config entry and, if needed, a few validation rules rather than copying a full form.
+
+Required approvers are Area Owner and Safety Officer. Area Owners can only approve permits in their own area. Admins can act as the safety approval slot and can perform administrative actions.
+
+## Decisions and Tradeoffs
+
+- SQLite is used for local review so the app runs quickly without external services. The included migration shows the intended relational schema for Postgres deployment.
+- Expiry is checked by a one-minute server timer and also before reads/mutations, so stale permits cannot be acted on if no browser is open.
+- Digital signature capture is implemented as typed signature text on approval. A canvas signature pad would be the production upgrade.
+- Admin user management is represented in the schema and permissions, but the UI focuses on PTW workflows rather than a full admin CRUD console.
+- The frontend is a dependency-light app served by Express. The assignment prefers React; with more time I would port the current screens into React components without changing the API/domain layer.
+
+## What I Would Build Next
+
+- React + TypeScript frontend with component tests.
+- Postgres deployment on Render/Railway with the migration applied.
+- Conflict warning UI for overlapping Hot Work and Confined Space permits in the same area/equipment/time window.
+- Canvas signature capture and QR code route per permit.
+- Background worker for expiry and notification stubs for approvers.
+- Richer admin screens for users, areas, and equipment.
+
+## AI Use
+
+AI was used to accelerate implementation, refactoring, README drafting, and test selection. The important decisions to be ready to explain are the shared permit model, type-field configuration, lifecycle state machine, server-side permission enforcement, and audit-trail design.

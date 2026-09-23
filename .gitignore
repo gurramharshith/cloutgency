@@ -1,0 +1,5 @@
+node_modules/
+dist/
+ptw.db
+.env
+npm-debug.log*
