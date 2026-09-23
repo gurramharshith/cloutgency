@@ -576,4 +576,7 @@ if (process.env.NODE_ENV !== 'test' && !process.env.VERCEL) {
   listen(Number(process.env.PORT || 3000));
 }
 
+// Named export is convenient for local tests; the default export is required
+// when Vercel traces this module while bundling the serverless function.
 export { app };
+export default app;
