@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { db, id, now } from './db.js';
 import { schema } from './schema.js';
 
@@ -7,6 +9,7 @@ function hashPassword(password: string, salt = crypto.randomBytes(16).toString('
   return `${salt}:${hash}`;
 }
 
+export function seedDatabase() {
 db.exec(`
 DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS work_logs;
@@ -155,3 +158,7 @@ for (let i = 0; i < rows.length; i++) {
 
 console.log('Seeded demo data.');
 console.log('Logins: ravi@demo.com/ravi123, priya@demo.com/priya123, anita@demo.com/anita123, admin@demo.com/dev123');
+}
+
+const isDirectExecution = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isDirectExecution) seedDatabase();

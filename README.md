@@ -35,6 +35,14 @@ npm test
 npm run build
 ```
 
+## Deploying to Vercel
+
+This project includes `api/index.ts` and `vercel.json`, so Vercel invokes Express as a serverless function rather than trying to run a long-lived `npm start` process. On Vercel, SQLite is stored in the function's writable `/tmp` directory and the demo data is seeded automatically on a fresh instance.
+
+Push these deployment files, then redeploy from the Vercel dashboard (or run `vercel --prod`). The first request may take a few seconds while the function initializes. Use the same demo credentials listed below.
+
+`/tmp` is ephemeral in a serverless environment, so changes made in the hosted Vercel demo can be reset whenever the function is replaced. For persistent SQLite hosting, set `DB_PATH` to a writable path on a durable volume (for example, Render/Railway disk storage). For Postgres, apply the included migration and replace the SQLite adapter with a Postgres client.
+
 ## Demo Logins
 
 | Role | Email | Password |
