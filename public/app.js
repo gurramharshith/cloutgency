@@ -1,6 +1,7 @@
 let me = null;
 let meta = null;
 let permits = [];
+let currentView = 'dashboard';
 const $ = (selector) => document.querySelector(selector);
 const typeName = (type) => meta?.permitTypes?.[type]?.label || type;
 const byId = (rows, value) => rows.find((row) => row.id === value);
@@ -65,17 +66,41 @@ async function loadApp() {
     <aside>
       <div class="brand">OP<span>MAINT</span></div>
       <p class="eyebrow">PERMIT TO WORK</p>
-      <nav><a class="selected">Dashboard</a><a>Approvals</a><a>Closure</a><a>Admin</a></nav>
+      <nav>
+        <a id="nav-dashboard" onclick="renderDashboard()">Dashboard</a>
+        <a id="nav-approvals" onclick="renderApprovals()">Approvals</a>
+        <a id="nav-closure" onclick="renderClosure()">Closure</a>
+        <a id="nav-admin" onclick="renderAdmin()">Admin</a>
+      </nav>
       <div class="profile">
         <div class="user">${escapeHtml(me.name)}</div>
         <div class="muted">${me.role.replaceAll('_', ' ')}</div>
         <button onclick="logout()">Logout</button>
       </div>
     </aside>
-    <main>
+    <main id="main">
+    </main>
+    <dialog id="modal"><button class="close" onclick="modal.close()">x</button><div id="modalbody"></div></dialog>`;
+  meta = await api('/api/meta');
+  await renderDashboard();
+}
+
+function setNav(view) {
+  document.querySelectorAll('nav a').forEach((link) => link.classList.remove('selected'));
+  $(`#nav-${view}`)?.classList.add('selected');
+}
+
+async function refreshMeta() {
+  meta = await api('/api/meta');
+}
+
+async function renderDashboard() {
+  currentView = 'dashboard';
+  setNav('dashboard');
+  $('#main').innerHTML = `
       <header>
         <div><h1>Permit Dashboard</h1><p class="sub">Active work, expiring permits, pending approvals and permit history.</p></div>
-        <button class="primary" onclick="openCreate()">+ New Permit</button>
+        ${['REQUESTER', 'ADMIN'].includes(me.role) ? '<button class="primary" onclick="openCreate()">+ New Permit</button>' : ''}
       </header>
       <section class="alerts">
         <div><b id="activeCount">0</b><span>Active permits now</span></div>
@@ -97,9 +122,7 @@ async function loadApp() {
           <tbody id="rows"></tbody>
         </table>
       </section>
-    </main>
-    <dialog id="modal"><button class="close" onclick="modal.close()">x</button><div id="modalbody"></div></dialog>`;
-  meta = await api('/api/meta');
+    `;
   fillFilters();
   await load();
 }
@@ -128,7 +151,15 @@ async function load() {
   $('#activeCount').textContent = permits.filter((p) => p.status === 'ACTIVE').length;
   $('#soonCount').textContent = permits.filter((p) => p.status === 'ACTIVE' && new Date(p.planned_end) - nowMs < 7_200_000 && new Date(p.planned_end) > nowMs).length;
   $('#approvalCount').textContent = (await api('/api/permits?myApprovals=true')).length;
-  $('#rows').innerHTML = permits
+  renderPermitRows(permits);
+}
+
+function renderPermitRows(rows) {
+  renderPermitRowsInto($('#rows'), rows);
+}
+
+function renderPermitRowsInto(target, rows) {
+  target.innerHTML = rows
     .map((p) => {
       const remaining = p.status === 'ACTIVE' ? `<div class="countdown">${timeLeft(p.planned_end)}</div>` : '';
       return `<tr>
@@ -140,6 +171,99 @@ async function load() {
       </tr>`;
     })
     .join('');
+}
+
+async function renderApprovals() {
+  currentView = 'approvals';
+  setNav('approvals');
+  $('#main').innerHTML = `
+    <header>
+      <div><h1>Approval Queue</h1><p class="sub">Permits waiting for your area-owner or safety approval.</p></div>
+    </header>
+    <section class="tablewrap">
+      <table>
+        <thead><tr><th>Permit</th><th>Work to Review</th><th>Validity</th><th>Status</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </section>`;
+  const rows = await api('/api/permits?myApprovals=true');
+  renderPermitRows(rows);
+  if (!rows.length) $('#rows').innerHTML = `<tr><td colspan="5" class="empty">No approvals are pending for your role.</td></tr>`;
+}
+
+async function renderClosure() {
+  currentView = 'closure';
+  setNav('closure');
+  $('#main').innerHTML = `
+    <header>
+      <div><h1>Closure</h1><p class="sub">Requester handback and safety verification queue.</p></div>
+    </header>
+    <section class="split">
+      <div>
+        <h3>Ready for requester close</h3>
+        <div class="tablewrap"><table><thead><tr><th>Permit</th><th>Work</th><th>Validity</th><th>Status</th><th></th></tr></thead><tbody id="activeRows"></tbody></table></div>
+      </div>
+      <div>
+        <h3>Ready for safety verification</h3>
+        <div class="tablewrap"><table><thead><tr><th>Permit</th><th>Work</th><th>Validity</th><th>Status</th><th></th></tr></thead><tbody id="closedRows"></tbody></table></div>
+      </div>
+    </section>`;
+  const active = await api('/api/permits?status=ACTIVE');
+  const closed = await api('/api/permits?status=CLOSED');
+  const closable = active.filter((p) => me.role === 'ADMIN' || p.requester_id === me.id);
+  const verifiable = ['SAFETY_OFFICER', 'ADMIN'].includes(me.role) ? closed : [];
+  renderPermitRowsInto($('#activeRows'), closable);
+  renderPermitRowsInto($('#closedRows'), verifiable);
+  if (!closable.length) $('#activeRows').innerHTML = `<tr><td colspan="5" class="empty">No active permits available for you to close.</td></tr>`;
+  if (!verifiable.length) $('#closedRows').innerHTML = `<tr><td colspan="5" class="empty">No permits are waiting for safety verification.</td></tr>`;
+}
+
+async function renderAdmin() {
+  currentView = 'admin';
+  setNav('admin');
+  if (me.role !== 'ADMIN') {
+    $('#main').innerHTML = `<header><div><h1>Admin</h1><p class="sub">Only Admin users can manage users, areas and equipment.</p></div></header><section class="notice">You are logged in as ${me.role.replaceAll('_', ' ')}.</section>`;
+    return;
+  }
+  await refreshMeta();
+  const users = await api('/api/users');
+  $('#main').innerHTML = `
+    <header>
+      <div><h1>Admin</h1><p class="sub">Manage users, plants, areas and equipment used by permits.</p></div>
+    </header>
+    <section class="admin-grid">
+      <form class="panel form" onsubmit="createUser(event)">
+        <h3 class="wide">Add user</h3>
+        <label>Name<input name="name" required></label>
+        <label>Email<input name="email" type="email" required></label>
+        <label>Password<input name="password" required></label>
+        <label>Role<select name="role"><option>REQUESTER</option><option>AREA_OWNER</option><option>SAFETY_OFFICER</option><option>ADMIN</option></select></label>
+        <label class="wide">Area for Area Owner<select name="areaId"><option value="">None</option>${meta.areas.map((a) => `<option value="${a.id}">${a.name}</option>`).join('')}</select></label>
+        <button class="primary wide">Create user</button>
+      </form>
+      <form class="panel form" onsubmit="createPlant(event)">
+        <h3 class="wide">Add plant</h3>
+        <label class="wide">Plant name<input name="name" required></label>
+        <button class="primary wide">Create plant</button>
+      </form>
+      <form class="panel form" onsubmit="createArea(event)">
+        <h3 class="wide">Add area</h3>
+        <label>Plant<select name="plantId">${meta.plants.map((p) => `<option value="${p.id}">${p.name}</option>`).join('')}</select></label>
+        <label>Area name<input name="name" required></label>
+        <button class="primary wide">Create area</button>
+      </form>
+      <form class="panel form" onsubmit="createEquipment(event)">
+        <h3 class="wide">Add equipment</h3>
+        <label>Area<select name="areaId">${meta.areas.map((a) => `<option value="${a.id}">${a.name}</option>`).join('')}</select></label>
+        <label>Tag<input name="tag" required></label>
+        <label class="wide">Name<input name="name" required></label>
+        <button class="primary wide">Create equipment</button>
+      </form>
+    </section>
+    <section class="tablewrap">
+      <table><thead><tr><th>User</th><th>Email</th><th>Role</th><th>Area</th></tr></thead>
+      <tbody>${users.map((u) => `<tr><td>${escapeHtml(u.name)}</td><td>${escapeHtml(u.email)}</td><td>${u.role.replaceAll('_', ' ')}</td><td>${escapeHtml(byId(meta.areas, u.area_id)?.name || '-')}</td></tr>`).join('')}</tbody></table>
+    </section>`;
 }
 
 function timeLeft(end) {
@@ -199,10 +323,17 @@ async function action(id, actionName) {
   try {
     await api(`/api/permits/${id}/action`, { method: 'POST', body: JSON.stringify(body) });
     modal.close();
-    await load();
+    await refreshCurrentView();
   } catch (error) {
     alert(error.message);
   }
+}
+
+async function refreshCurrentView() {
+  if (currentView === 'approvals') return renderApprovals();
+  if (currentView === 'closure') return renderClosure();
+  if (currentView === 'admin') return renderAdmin();
+  return renderDashboard();
 }
 
 async function logWork(id) {
@@ -210,7 +341,7 @@ async function logWork(id) {
   if (!note) return;
   await api(`/api/permits/${id}/work-logs`, { method: 'POST', body: JSON.stringify({ note }) });
   await detail(id);
-  await load();
+  await refreshCurrentView();
 }
 
 async function requestExtension(id) {
@@ -225,7 +356,34 @@ async function decideExtension(extensionId, decision, permitId) {
   const comment = prompt('Comment') || '';
   await api(`/api/extensions/${extensionId}/decision`, { method: 'POST', body: JSON.stringify({ decision, comment }) });
   await detail(permitId);
-  await load();
+  await refreshCurrentView();
+}
+
+async function submitAdminForm(event, url) {
+  event.preventDefault();
+  const body = Object.fromEntries(new FormData(event.target));
+  try {
+    await api(url, { method: 'POST', body: JSON.stringify(body) });
+    await renderAdmin();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+function createUser(event) {
+  return submitAdminForm(event, '/api/users');
+}
+
+function createPlant(event) {
+  return submitAdminForm(event, '/api/plants');
+}
+
+function createArea(event) {
+  return submitAdminForm(event, '/api/areas');
+}
+
+function createEquipment(event) {
+  return submitAdminForm(event, '/api/equipment');
 }
 
 function openCreate() {
@@ -233,19 +391,28 @@ function openCreate() {
   $('#modalbody').innerHTML = `
     <h2>New permit</h2>
     <form class="form" id="createForm">
-      <label>Permit type<select name="type" id="permitType">${typeOptions}</select></label>
-      <label>Contractor / team<input name="contractor" value="Apex Engineering" required></label>
-      <label class="wide">Work description<textarea name="description" required>Replace leaking flange gasket under isolation</textarea></label>
-      <label>Plant<select name="plantId" id="plantSelect">${meta.plants.map((p) => `<option value="${p.id}">${p.name}</option>`).join('')}</select></label>
-      <label>Area<select name="areaId" id="areaSelect"></select></label>
-      <label>Equipment<select name="equipmentId" id="equipmentSelect"></select></label>
-      <label>Start<input type="datetime-local" name="plannedStart" required></label>
-      <label>End<input type="datetime-local" name="plannedEnd" required></label>
-      <label>Hazards<input name="hazards" value="Flammable vapour; stored energy" required></label>
-      <label>PPE<input name="ppe" value="Helmet, gloves, goggles, safety shoes" required></label>
-      <label class="wide">Precautions<textarea name="precautions" required>Toolbox talk, barricade, gas testing, isolation verified</textarea></label>
-      <div id="typeFields" class="wide form inset"></div>
-      <button class="primary wide">Save Draft</button>
+      <p class="wide muted" id="createProgress">Step 1 of 3 — work and location</p>
+      <div class="create-step wide form" data-step="1">
+        <label>Permit type<select name="type" id="permitType">${typeOptions}</select></label>
+        <label>Contractor / team<input name="contractor" value="Apex Engineering" required></label>
+        <label class="wide">Work description<textarea name="description" required>Replace leaking flange gasket under isolation</textarea></label>
+        <label>Plant<select name="plantId" id="plantSelect">${meta.plants.map((p) => `<option value="${p.id}">${p.name}</option>`).join('')}</select></label>
+        <label>Area<select name="areaId" id="areaSelect"></select></label>
+        <label class="wide">Equipment<select name="equipmentId" id="equipmentSelect"></select></label>
+      </div>
+      <div class="create-step wide form" data-step="2" hidden>
+        <label>Start<input type="datetime-local" name="plannedStart" required></label>
+        <label>End<input type="datetime-local" name="plannedEnd" required></label>
+        <label>Hazards<input name="hazards" value="Flammable vapour; stored energy" required></label>
+        <label>PPE<input name="ppe" value="Helmet, gloves, goggles, safety shoes" required></label>
+        <label class="wide">Precautions<textarea name="precautions" required>Toolbox talk, barricade, gas testing, isolation verified</textarea></label>
+      </div>
+      <div class="create-step wide form" data-step="3" hidden><div id="typeFields" class="wide form inset"></div></div>
+      <div class="wide wizard-actions">
+        <button type="button" id="createBack" onclick="changeCreateStep(-1)" hidden>Back</button>
+        <button type="button" id="createNext" class="primary" onclick="changeCreateStep(1)">Continue</button>
+        <button type="submit" id="createSave" class="primary" hidden>Save Draft</button>
+      </div>
     </form>`;
   const start = new Date(Date.now() + 60 * 60_000);
   const end = new Date(Date.now() + 4 * 60 * 60_000);
@@ -258,6 +425,29 @@ function openCreate() {
   fillLocation();
   renderTypeFields();
   modal.showModal();
+}
+
+function changeCreateStep(direction) {
+  const form = $('#createForm');
+  const current = Number(form.dataset.step || 1);
+  if (direction > 0) {
+    const fields = [...document.querySelectorAll(`.create-step[data-step="${current}"] input, .create-step[data-step="${current}"] select, .create-step[data-step="${current}"] textarea`)];
+    if (!fields.every((field) => field.checkValidity())) {
+      fields.find((field) => !field.checkValidity())?.reportValidity();
+      return;
+    }
+  }
+  showCreateStep(current + direction);
+}
+
+function showCreateStep(step) {
+  const form = $('#createForm');
+  form.dataset.step = String(step);
+  document.querySelectorAll('.create-step').forEach((section) => { section.hidden = Number(section.dataset.step) !== step; });
+  $('#createProgress').textContent = `Step ${step} of 3 — ${['work and location', 'timing and controls', 'permit-specific checks'][step - 1]}`;
+  $('#createBack').hidden = step === 1;
+  $('#createNext').hidden = step === 3;
+  $('#createSave').hidden = step !== 3;
 }
 
 function fillLocation() {
@@ -297,7 +487,7 @@ async function create(event) {
   try {
     await api('/api/permits', { method: 'POST', body: JSON.stringify(body) });
     modal.close();
-    await load();
+    await refreshCurrentView();
   } catch (error) {
     alert(error.message);
   }

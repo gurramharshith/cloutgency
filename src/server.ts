@@ -91,8 +91,27 @@ function rowPermit(idValue: string) {
 }
 
 function allApproved(permitId: string) {
-  const row = db.prepare("SELECT count(*) c FROM approvals WHERE permit_id=? AND decision!='APPROVED'").get(permitId) as { c: number };
-  return row.c === 0;
+  const row = db
+    .prepare("SELECT count(*) c FROM approvals WHERE permit_id=? AND role IN ('AREA_OWNER','SAFETY_OFFICER') AND decision='APPROVED'")
+    .get(permitId) as { c: number };
+  return row.c === 2;
+}
+
+function validateLocation(plantId: string, areaId: string, equipmentId?: string | null) {
+  const area = db.prepare('SELECT plant_id FROM areas WHERE id=?').get(areaId) as { plant_id: string } | undefined;
+  if (!area || area.plant_id !== plantId) throw new Error('Area must belong to the selected plant');
+  if (equipmentId) {
+    const equipment = db.prepare('SELECT area_id FROM equipment WHERE id=?').get(equipmentId) as { area_id: string } | undefined;
+    if (!equipment || equipment.area_id !== areaId) throw new Error('Equipment must belong to the selected area');
+  }
+}
+
+function validWindow(start: unknown, end: unknown) {
+  const startTime = new Date(String(start)).getTime();
+  const endTime = new Date(String(end)).getTime();
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || endTime <= startTime) {
+    throw new Error('Planned end must be after a valid planned start');
+  }
 }
 
 function expirePermits() {
@@ -122,14 +141,21 @@ function canClose(user: User, permit: Permit) {
   return user.role === 'ADMIN' || (user.role === 'REQUESTER' && permit.requester_id === user.id);
 }
 
+// Admins have full access and may fulfil either required approval slot.
+function pendingApprovalRole(user: User, permit: Permit) {
+  if (user.role === 'ADMIN') {
+    return db.prepare("SELECT role FROM approvals WHERE permit_id=? AND decision='PENDING' ORDER BY CASE role WHEN 'AREA_OWNER' THEN 0 ELSE 1 END LIMIT 1")
+      .get(permit.id) as { role: Role } | undefined;
+  }
+  const role = requiredApprovalRole(user.role);
+  if (!role) return undefined;
+  return db.prepare("SELECT role FROM approvals WHERE permit_id=? AND role=? AND decision='PENDING'")
+    .get(permit.id, role) as { role: Role } | undefined;
+}
+
 function allowedActions(user: User, permit: Permit) {
   const actions: string[] = [];
-  const approvalRole = requiredApprovalRole(user.role);
-  const pending = approvalRole
-    ? db
-        .prepare("SELECT id FROM approvals WHERE permit_id=? AND role=? AND decision='PENDING'")
-        .get(permit.id, approvalRole)
-    : null;
+  const pending = pendingApprovalRole(user, permit);
   if (permit.status === 'DRAFT' && (user.role === 'ADMIN' || permit.requester_id === user.id)) actions.push('submit');
   if (permit.status === 'PENDING_APPROVAL' && pending && canApprove(user.role, permit.requester_id, user.id, permit.area_id, user.area_id)) {
     actions.push('approve', 'reject');
@@ -199,6 +225,52 @@ app.get('/api/users', (req, res) => {
   }
 });
 
+app.post('/api/users', (req, res) => {
+  try {
+    assertRole(currentUser(req), ['ADMIN']);
+    const body = req.body;
+    if (!body.name || !body.email || !body.password || !body.role) throw new Error('Name, email, password and role are required');
+    if (body.role === 'AREA_OWNER' && !body.areaId) throw new Error('Area owner must be assigned to an area');
+    db.prepare('INSERT INTO users VALUES (?,?,?,?,?,?,?,?)').run(id(), body.name, body.email, hashPassword(body.password), body.role, body.areaId || null, 1, now());
+    res.status(201).json({ ok: true });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/plants', (req, res) => {
+  try {
+    assertRole(currentUser(req), ['ADMIN']);
+    if (!req.body.name) throw new Error('Plant name is required');
+    db.prepare('INSERT INTO plants VALUES (?,?)').run(id(), req.body.name);
+    res.status(201).json({ ok: true });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/areas', (req, res) => {
+  try {
+    assertRole(currentUser(req), ['ADMIN']);
+    if (!req.body.plantId || !req.body.name) throw new Error('Plant and area name are required');
+    db.prepare('INSERT INTO areas VALUES (?,?,?)').run(id(), req.body.plantId, req.body.name);
+    res.status(201).json({ ok: true });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/equipment', (req, res) => {
+  try {
+    assertRole(currentUser(req), ['ADMIN']);
+    if (!req.body.areaId || !req.body.tag || !req.body.name) throw new Error('Area, tag and equipment name are required');
+    db.prepare('INSERT INTO equipment VALUES (?,?,?,?)').run(id(), req.body.areaId, req.body.tag, req.body.name);
+    res.status(201).json({ ok: true });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 app.get('/api/permits', (req, res) => {
   try {
     expirePermits();
@@ -231,6 +303,12 @@ app.get('/api/permits', (req, res) => {
       args.push(q.to);
     }
     if (q.myApprovals === 'true') {
+      if (user.role === 'ADMIN') {
+        sql += " AND EXISTS (SELECT 1 FROM approvals ap WHERE ap.permit_id=p.id AND ap.decision='PENDING')";
+        sql += ' AND p.requester_id<>?';
+        args.push(user.id);
+        return res.json(db.prepare(`${sql} ORDER BY p.planned_end ASC`).all(...args));
+      }
       const approvalRole = requiredApprovalRole(user.role);
       if (!approvalRole) return res.json([]);
       sql += " AND EXISTS (SELECT 1 FROM approvals ap WHERE ap.permit_id=p.id AND ap.role=? AND ap.decision='PENDING')";
@@ -289,7 +367,8 @@ app.post('/api/permits', (req, res) => {
     const body = req.body;
     const details = parseDetails(body);
     validateTypeDetails(body.type, details);
-    if (new Date(body.plannedEnd) <= new Date(body.plannedStart)) throw new Error('Planned end must be after planned start');
+    validWindow(body.plannedStart, body.plannedEnd);
+    validateLocation(body.plantId, body.areaId, body.equipmentId || null);
     const permitId = id();
     const stamp = now();
     db.prepare(
@@ -338,6 +417,7 @@ app.patch('/api/permits/:permitId', (req, res) => {
     const body = req.body;
     const nextDetails = body.details ? parseDetails(body) : JSON.parse(permit.details);
     validateTypeDetails((body.type || permit.type) as PermitType, nextDetails);
+    validWindow(body.plannedStart ?? permit.planned_start, body.plannedEnd ?? permit.planned_end);
     const editable = ['contractor', 'description', 'planned_start', 'planned_end', 'hazards', 'ppe', 'precautions', 'details'] as const;
     const updates: string[] = [];
     const values: any[] = [];
@@ -371,8 +451,9 @@ app.post('/api/permits/:permitId/action', (req, res) => {
 
     if (action === 'approve' || action === 'reject') {
       if (action === 'reject' && !comment) throw new Error('Rejection reason is required');
-      const role = requiredApprovalRole(user.role);
-      const approval = db.prepare("SELECT * FROM approvals WHERE permit_id=? AND role=? AND decision='PENDING'").get(permit.id, role) as any;
+      const pending = pendingApprovalRole(user, permit);
+      const role = pending?.role;
+      const approval = role ? db.prepare("SELECT * FROM approvals WHERE permit_id=? AND role=? AND decision='PENDING'").get(permit.id, role) as any : null;
       if (!approval || !canApprove(user.role, permit.requester_id, user.id, permit.area_id, user.area_id)) throw new Error('No pending approval for this user');
       db.prepare('UPDATE approvals SET approver_id=?,decision=?,comment=?,signature=?,decided_at=? WHERE id=?').run(
         user.id,
@@ -396,6 +477,8 @@ app.post('/api/permits/:permitId/action', (req, res) => {
       return res.json({ status: permit.status });
     }
 
+    if (action === 'close' && !completionNotes?.trim()) throw new Error('Completion notes are required to close a permit');
+    if (action === 'verify' && !verificationNotes?.trim()) throw new Error('Verification notes are required to verify closure');
     const next = transition(permit.status, action, {
       allApproved: allApproved(permit.id),
       now: new Date(),
@@ -420,6 +503,7 @@ app.post('/api/permits/:permitId/work-logs', (req, res) => {
     const user = currentUser(req);
     const permit = rowPermit(req.params.permitId);
     if (!permit || permit.status !== 'ACTIVE') throw new Error("Work can only be logged against an ACTIVE permit");
+    if (!req.body.note?.trim()) throw new Error('Work log note is required');
     db.prepare('INSERT INTO work_logs VALUES (?,?,?,?,?)').run(id(), permit.id, user.id, req.body.note, now());
     audit(permit.id, user.id, 'WORK_LOGGED', 'note', null, req.body.note);
     res.sendStatus(201);
@@ -435,6 +519,7 @@ app.post('/api/permits/:permitId/extensions', (req, res) => {
     if (!permit || permit.status !== 'ACTIVE' || permit.requester_id !== user.id) throw new Error('Only requester can request extension for an active permit');
     const hours = Number(req.body.hours);
     if (!Number.isInteger(hours) || hours < 1 || hours > 4) throw new Error('Extensions are capped between 1 and 4 hours');
+    if (!req.body.reason?.trim()) throw new Error('Extension reason is required');
     db.prepare('INSERT INTO extension_requests VALUES (?,?,?,?,?,?,?,?,?)').run(id(), permit.id, user.id, hours, req.body.reason, 'PENDING', null, null, now());
     audit(permit.id, user.id, 'EXTENSION_REQUESTED', 'planned_end', permit.planned_end, `+${hours} hour(s)`, req.body.reason);
     res.sendStatus(201);

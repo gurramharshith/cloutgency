@@ -142,5 +142,5 @@ export function validateTypeDetails(type: PermitType, details: Record<string, un
 }
 
 export function nonTerminalStatuses() {
-  return ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'ACTIVE', 'SUSPENDED', 'CLOSED'];
+  return ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'ACTIVE', 'SUSPENDED'];
 }

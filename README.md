@@ -19,7 +19,14 @@ npm run seed
 npm start
 ```
 
-Open `http://localhost:3000`.
+The server prints the exact URL when it starts. It prefers `http://localhost:3000`; if that port is already in use, it automatically tries `3001`, then the next available port. Open the URL printed in the terminal (for example, `http://localhost:3001`).
+
+To force a particular free port in PowerShell:
+
+```powershell
+$env:PORT=3001
+npm start
+```
 
 Useful commands:
 
@@ -47,9 +54,9 @@ Seed data creates 4 users, 2 plants, 3 areas, 6 equipment records, and 10 permit
 - Server-side checks for all required approvals, planned start time, terminal states, active-only work logs, role permissions, area-owner scope, and no self-approval.
 - Dashboard filters by status, permit type, area, date range, and "my approvals pending".
 - Active and expiring-in-two-hours dashboard counters, plus countdown text on active rows.
-- Multi-step-style create form that adapts to permit type and saves as Draft.
+- Three-step create form (work/location, timing/controls, and permit-specific checks) that adapts to the selected permit type and saves as Draft.
 - Permit detail view with full core data, type details, approval trail, actions available to the logged-in user, closure notes, work log, extension requests, and readable audit timeline.
-- Approval view through permit detail: approve with comment/signature text or reject with mandatory reason.
+- Approval queue and permit-detail approval actions: approve with comment/signature text or reject with a mandatory reason. The queue refreshes after a decision.
 - Closure flow: requester closes with completion notes; safety officer/admin verifies with verification notes.
 - Immutable audit entries for state changes, approvals/rejections, auto-expiry, field edits, work logs, and extension decisions.
 - Extension request flow capped at 1-4 hours, safety/admin approval required.
@@ -60,24 +67,33 @@ Seed data creates 4 users, 2 plants, 3 areas, 6 equipment records, and 10 permit
 
 The core permit fields live in `permits`; type-specific fields live in the `details` JSON column and are validated using the configuration in `src/domain.ts`. Adding a fifth permit type should mostly mean adding one config entry and, if needed, a few validation rules rather than copying a full form.
 
-Required approvers are Area Owner and Safety Officer. Area Owners can only approve permits in their own area. Admins can act as the safety approval slot and can perform administrative actions.
+Required approvers are Area Owner and Safety Officer. Area Owners can only approve permits in their own area. Admins have full workflow access and can fulfil either pending approval slot, but no user—including an admin—can approve their own permit.
 
 ## Decisions and Tradeoffs
 
 - SQLite is used for local review so the app runs quickly without external services. The included migration shows the intended relational schema for Postgres deployment.
 - Expiry is checked by a one-minute server timer and also before reads/mutations, so stale permits cannot be acted on if no browser is open.
 - Digital signature capture is implemented as typed signature text on approval. A canvas signature pad would be the production upgrade.
-- Admin user management is represented in the schema and permissions, but the UI focuses on PTW workflows rather than a full admin CRUD console.
+- The Admin screen creates users, plants, areas, and equipment; it also has full workflow authority, including either approval slot. Administrative deletion is deliberately omitted to preserve historical permit references.
 - The frontend is a dependency-light app served by Express. The assignment prefers React; with more time I would port the current screens into React components without changing the API/domain layer.
 
-## What I Would Build Next
+## Known Limitations / What I Would Build Next
 
-- React + TypeScript frontend with component tests.
+- The frontend is dependency-light browser JavaScript rather than React + TypeScript. The API and domain layers are TypeScript; a production iteration would move the screens into typed React components with component tests.
 - Postgres deployment on Render/Railway with the migration applied.
 - Conflict warning UI for overlapping Hot Work and Confined Space permits in the same area/equipment/time window.
 - Canvas signature capture and QR code route per permit.
 - Background worker for expiry and notification stubs for approvers.
 - Richer admin screens for users, areas, and equipment.
+
+There are no known broken core workflows after the final audit. Before submitting, run the seed command and test each demo role in the deployed environment.
+
+## Final Audit Checklist
+
+- `npm test` covers activation guards, terminal-state handling, approval scope/self-approval, approval-slot mapping, and type-detail validation.
+- `npm run seed` resets the local database and produces the four demo users, two plants, six equipment records, and ten permits.
+- Approval, closure, verification, extension, work-log, and admin-create requests are checked by the server rather than trusted from the UI.
+- The UI only exposes available permit actions and refreshes the current dashboard, approval, closure, or admin view after a mutation.
 
 ## AI Use
 
