@@ -468,8 +468,21 @@ app.post('/api/extensions/:extensionId/decision', (req, res) => {
 
 app.get('*', (_req, res) => res.sendFile(path.join(publicDir, 'index.html')));
 
+function listen(port: number, attemptsLeft = 10) {
+  const server = app.listen(port, () => console.log(`PTW running at http://localhost:${port}`));
+  server.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code === 'EADDRINUSE' && !process.env.PORT && attemptsLeft > 0) {
+      console.log(`Port ${port} is busy, trying ${port + 1}...`);
+      listen(port + 1, attemptsLeft - 1);
+      return;
+    }
+    console.error(error.message);
+    process.exit(1);
+  });
+}
+
 if (process.env.NODE_ENV !== 'test') {
-  app.listen(process.env.PORT || 3000, () => console.log(`PTW running at http://localhost:${process.env.PORT || 3000}`));
+  listen(Number(process.env.PORT || 3000));
 }
 
 export { app };
